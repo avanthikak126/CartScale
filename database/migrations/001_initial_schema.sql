@@ -68,3 +68,150 @@ ON products(category_id);
 
 CREATE INDEX idx_orders_user_id
 ON orders(user_id);
+-- Row Level Security
+
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own profile"
+ON profiles
+FOR SELECT
+USING (auth.uid() = id);
+
+CREATE POLICY "Users can create their own profile"
+ON profiles
+FOR INSERT
+WITH CHECK (auth.uid() = id);
+
+CREATE POLICY "Users can update their own profile"
+ON profiles
+FOR UPDATE
+USING (auth.uid() = id)
+WITH CHECK (auth.uid() = id);
+ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can view categories"
+ON categories
+FOR SELECT
+USING (true);
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can view products"
+ON products
+FOR SELECT
+USING (true);
+
+CREATE POLICY "Admins can create products"
+ON products
+FOR INSERT
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM profiles
+        WHERE profiles.id = auth.uid()
+        AND profiles.role = 'admin'
+    )
+);
+ALTER TABLE carts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own cart"
+ON carts
+FOR SELECT
+USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can create their own cart"
+ON carts
+FOR INSERT
+WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own cart"
+ON carts
+FOR UPDATE
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+ALTER TABLE cart_items ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own cart items"
+ON cart_items
+FOR SELECT
+USING (
+    EXISTS (
+        SELECT 1
+        FROM carts
+        WHERE carts.id = cart_items.cart_id
+        AND carts.user_id = auth.uid()
+    )
+);
+
+CREATE POLICY "Users can add items to their own cart"
+ON cart_items
+FOR INSERT
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM carts
+        WHERE carts.id = cart_items.cart_id
+        AND carts.user_id = auth.uid()
+    )
+);
+
+CREATE POLICY "Users can update their own cart items"
+ON cart_items
+FOR UPDATE
+USING (
+    EXISTS (
+        SELECT 1
+        FROM carts
+        WHERE carts.id = cart_items.cart_id
+        AND carts.user_id = auth.uid()
+    )
+)
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM carts
+        WHERE carts.id = cart_items.cart_id
+        AND carts.user_id = auth.uid()
+    )
+);
+
+CREATE POLICY "Users can delete their own cart items"
+ON cart_items
+FOR DELETE
+USING (
+    EXISTS (
+        SELECT 1
+        FROM carts
+        WHERE carts.id = cart_items.cart_id
+        AND carts.user_id = auth.uid()
+    )
+);
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own orders"
+ON orders
+FOR SELECT
+USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can create their own orders"
+ON orders
+FOR INSERT
+WITH CHECK (auth.uid() = user_id);
+ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own order items"
+ON order_items
+FOR SELECT
+USING (
+    EXISTS (
+        SELECT 1
+        FROM orders
+        WHERE orders.id = order_items.order_id
+        AND orders.user_id = auth.uid()
+    )
+);
+ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can view inventory"
+ON inventory
+FOR SELECT
+USING (true);
