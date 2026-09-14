@@ -19,7 +19,7 @@ const { page, limit } = result.data;
 
     const { data, error } = await supabase
         .from("products")
-        .select("*")
+        .select("id, name, price, category_id")
         .range(from, to);
 
    if (error) {
