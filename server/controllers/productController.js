@@ -108,10 +108,35 @@ const updateProduct = async (req, res, next) => {
 
     res.json(data);
 };
+const deleteProduct = async (req, res, next) => {
+    const id = Number(req.params.id);
 
+    const { data, error } = await req.supabase
+        .from("products")
+        .delete()
+        .eq("id", id)
+        .select()
+        .single();
+
+    if (error) {
+        if (error.code === "PGRST116") {
+            return res.status(404).json({
+                error: "Product not found"
+            });
+        }
+
+        return next(error);
+    }
+
+    res.json({
+        message: "Product deleted successfully",
+        product: data
+    });
+};
 module.exports = {
     getProducts,
     getProductById,
     createProduct,
-    updateProduct
+    updateProduct,
+    deleteProduct
 };
