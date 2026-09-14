@@ -78,9 +78,40 @@ const createProduct = async (req, res,next) => {
 
     res.status(201).json(data);
 };
+const updateProduct = async (req, res, next) => {
+    const id = Number(req.params.id);
+
+    const result = productSchema.partial().safeParse(req.body);
+
+    if (!result.success) {
+        return res.status(400).json({
+            error: result.error.issues[0].message
+        });
+    }
+
+    const { data, error } = await req.supabase
+        .from("products")
+        .update(result.data)
+        .eq("id", id)
+        .select()
+        .single();
+
+    if (error) {
+        if (error.code === "PGRST116") {
+            return res.status(404).json({
+                error: "Product not found"
+            });
+        }
+
+        return next(error);
+    }
+
+    res.json(data);
+};
 
 module.exports = {
     getProducts,
     getProductById,
-    createProduct
+    createProduct,
+    updateProduct
 };

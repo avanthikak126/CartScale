@@ -111,6 +111,25 @@ WITH CHECK (
         AND profiles.role = 'admin'
     )
 );
+CREATE POLICY "Admins can update products"
+ON products
+FOR UPDATE
+USING (
+    EXISTS (
+        SELECT 1
+        FROM profiles
+        WHERE profiles.id = auth.uid()
+        AND profiles.role = 'admin'
+    )
+)
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM profiles
+        WHERE profiles.id = auth.uid()
+        AND profiles.role = 'admin'
+    )
+);
 ALTER TABLE carts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view their own cart"
