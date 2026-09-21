@@ -245,3 +245,128 @@ CREATE POLICY "Anyone can view inventory"
 ON inventory
 FOR SELECT
 USING (true);
+CREATE POLICY "Admins can create categories"
+ON categories
+FOR INSERT
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM profiles
+        WHERE profiles.id = auth.uid()
+        AND profiles.role = 'admin'
+    )
+);
+
+CREATE POLICY "Admins can update categories"
+ON categories
+FOR UPDATE
+USING (
+    EXISTS (
+        SELECT 1
+        FROM profiles
+        WHERE profiles.id = auth.uid()
+        AND profiles.role = 'admin'
+    )
+)
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM profiles
+        WHERE profiles.id = auth.uid()
+        AND profiles.role = 'admin'
+    )
+);
+
+CREATE POLICY "Admins can delete categories"
+ON categories
+FOR DELETE
+USING (
+    EXISTS (
+        SELECT 1
+        FROM profiles
+        WHERE profiles.id = auth.uid()
+        AND profiles.role = 'admin'
+    )
+);
+CREATE POLICY "Users can create their own order items"
+ON order_items
+FOR INSERT
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM orders
+        WHERE orders.id = order_items.order_id
+        AND orders.user_id = auth.uid()
+    )
+);
+CREATE OR REPLACE FUNCTION create_order()
+RETURNS json
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+DECLARE
+    v_user_id uuid := auth.uid();
+    v_cart_id bigint;
+    v_order_id bigint;
+    v_total numeric(10,2);
+BEGIN
+    SELECT id
+    INTO v_cart_id
+    FROM carts
+    WHERE user_id = v_user_id
+    FOR UPDATE;
+
+    IF v_cart_id IS NULL THEN
+        RAISE EXCEPTION 'Cart not found';
+    END IF;
+
+    SELECT COALESCE(SUM(p.price * ci.quantity), 0)
+    INTO v_total
+    FROM cart_items ci
+    JOIN products p ON p.id = ci.product_id
+    WHERE ci.cart_id = v_cart_id;
+
+    IF v_total = 0 THEN
+        RAISE EXCEPTION 'Cart is empty';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM cart_items ci
+        JOIN inventory i ON i.product_id = ci.product_id
+        WHERE ci.cart_id = v_cart_id
+        AND i.quantity < ci.quantity
+    ) THEN
+        RAISE EXCEPTION 'Insufficient inventory';
+    END IF;
+
+    INSERT INTO orders (user_id, total_amount)
+    VALUES (v_user_id, v_total)
+    RETURNING id INTO v_order_id;
+
+    INSERT INTO order_items (order_id, product_id, quantity, price)
+    SELECT
+        v_order_id,
+        ci.product_id,
+        ci.quantity,
+        p.price
+    FROM cart_items ci
+    JOIN products p ON p.id = ci.product_id
+    WHERE ci.cart_id = v_cart_id;
+
+    UPDATE inventory i
+    SET quantity = i.quantity - ci.quantity,
+        updated_at = now()
+    FROM cart_items ci
+    WHERE i.product_id = ci.product_id
+    AND ci.cart_id = v_cart_id;
+
+    DELETE FROM cart_items
+    WHERE cart_id = v_cart_id;
+
+    RETURN json_build_object(
+        'order_id', v_order_id,
+        'total_amount', v_total
+    );
+END;
+$$;
