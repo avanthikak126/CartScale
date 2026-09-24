@@ -7,8 +7,19 @@ const errorMiddleware = require("./middleware/errorMiddleware");
 const categoryRoutes = require("./routes/categoryRoutes");
 const cartRoutes = require("./routes/cartRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const { connectRedis } = require("./redis");
+const rateLimit = require("express-rate-limit");
 
 const app = express();
+const limiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 100,
+    message: {
+        error: "Too many requests. Please try again later."
+    }
+});
+
+app.use(limiter);
 app.use(express.json());
 
 
@@ -24,6 +35,8 @@ app.get("/", (req, res) => {
 });
 
 if (require.main === module) {
+    connectRedis();
+
     app.listen(3000, () => {
         console.log("Server running on port 3000");
     });
