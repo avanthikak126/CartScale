@@ -1,16 +1,22 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const productRoutes = require("./routes/productRoutes");
 const authRoutes = require("./routes/authRoutes");
 const errorMiddleware = require("./middleware/errorMiddleware");
 const categoryRoutes = require("./routes/categoryRoutes");
 const cartRoutes = require("./routes/cartRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const addressRoutes = require("./routes/addressRoutes");
 const { connectRedis, redis } = require("./redis");
 const rateLimit = require("express-rate-limit");
+const paymentRoutes = require("./routes/paymentRoutes");
 
 const app = express();
+app.use(cors({
+    origin: "http://localhost:5173"
+}));
 const limiter = rateLimit({
     windowMs: 60 * 1000,
     limit: 100,
@@ -28,6 +34,8 @@ app.use(authRoutes);
 app.use(categoryRoutes);
 app.use(cartRoutes);
 app.use(orderRoutes);
+app.use(addressRoutes);
+app.use(paymentRoutes);
 app.get("/health", async (req, res) => {
     try {
         await redis.ping();

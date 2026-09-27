@@ -1,8 +1,14 @@
 const supabase = require("../supabase");
 
 const createOrder = async (req, res, next) => {
+    const { address_id, payment_method } = req.body || {};
+
+    const rpcParams = {};
+    if (address_id) rpcParams.p_address_id = address_id;
+    if (payment_method) rpcParams.p_payment_method = payment_method;
+
     const { data, error } = await req.supabase
-        .rpc("create_order");
+        .rpc("create_order", rpcParams);
 
     if (error) {
         return next(error);
@@ -19,6 +25,17 @@ const getOrders = async (req, res, next) => {
             status,
             total_amount,
             created_at,
+            address_id,
+            payment_method,
+            addresses (
+                id,
+                full_name,
+                phone,
+                address_line,
+                city,
+                state,
+                pincode
+            ),
             order_items (
                 id,
                 product_id,
@@ -46,6 +63,17 @@ const getOrderById = async (req, res, next) => {
             status,
             total_amount,
             created_at,
+            address_id,
+            payment_method,
+            addresses (
+                id,
+                full_name,
+                phone,
+                address_line,
+                city,
+                state,
+                pincode
+            ),
             order_items (
                 id,
                 product_id,

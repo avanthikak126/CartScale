@@ -109,10 +109,19 @@ const updateCartItem = async (req, res, next) => {
         });
     }
 
+    const { data: cart, error: cartError } = await req.supabase
+        .from("carts")
+        .select("id")
+        .eq("user_id", req.user.id)
+        .single();
+
+    if (cartError) return next(cartError);
+
     const { data, error } = await req.supabase
         .from("cart_items")
         .update({ quantity })
         .eq("id", id)
+        .eq("cart_id", cart.id)
         .select()
         .single();
 
@@ -129,14 +138,22 @@ const updateCartItem = async (req, res, next) => {
     res.json(data);
 };
 
-
 const deleteCartItem = async (req, res, next) => {
     const id = Number(req.params.id);
+
+    const { data: cart, error: cartError } = await req.supabase
+        .from("carts")
+        .select("id")
+        .eq("user_id", req.user.id)
+        .single();
+
+    if (cartError) return next(cartError);
 
     const { data, error } = await req.supabase
         .from("cart_items")
         .delete()
         .eq("id", id)
+        .eq("cart_id", cart.id)
         .select()
         .single();
 
