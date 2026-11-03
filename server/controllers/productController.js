@@ -4,11 +4,16 @@ const paginationSchema = require("../validators/paginationValidator");
 const { redis } = require("../redis");
 
 const clearProductCache = async () => {
-    const keys = await redis.sMembers("product_cache_keys");
+    try {
+        if (!redis || !redis.isOpen) return;
+        const keys = await redis.sMembers("product_cache_keys");
 
-    if (keys.length > 0) {
-        await redis.del(keys);
-        await redis.del("product_cache_keys");
+        if (keys && keys.length > 0) {
+            await redis.del(keys);
+            await redis.del("product_cache_keys");
+        }
+    } catch (err) {
+        console.error("Redis cache clear error:", err.message);
     }
 };
 
@@ -22,49 +27,109 @@ const getProducts = async (req, res, next) => {
     }
 
     const { page, limit } = result.data;
-    const categoryId = req.query.category_id
-    ? Number(req.query.category_id)
-    : null;
+    let categoryId = req.query.category_id
+        ? Number(req.query.category_id)
+        : null;
 
-const cacheKey = `products:${page}:${limit}:${categoryId ?? "all"}`;
+    if (!categoryId && req.query.category) {
+        const catName = req.query.category.replace(/-/g, " ").trim();
+        const { data: cat } = await supabase
+            .from("categories")
+            .select("id")
+            .ilike("name", catName)
+            .single();
+        if (cat) categoryId = cat.id;
+    }
 
-const cachedData = await redis.get(cacheKey);
+    const search = (req.query.search || req.query.q || "").trim();
+    const sort = (req.query.sort || "").trim();
+    const cacheKey = `products:${page}:${limit}:${categoryId ?? "all"}:${search || "all"}:${sort || "default"}`;
 
-if (cachedData) {
-    return res.json(JSON.parse(cachedData));
-}
-    
+    if (redis && redis.isOpen) {
+        try {
+            const cachedData = await redis.get(cacheKey);
+            if (cachedData) {
+                return res.json(JSON.parse(cachedData));
+            }
+        } catch (err) {
+            console.error("Redis cache get error:", err.message);
+        }
+    }
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
+    // Build the data query
     let query = supabase
         .from("products")
-        .select("id, name, price, category_id")
-        .order("id");
+        .select("*, categories(name)");
+
+    // Build the count query
+    let countQuery = supabase
+        .from("products")
+        .select("id", { count: "exact", head: true });
 
     if (categoryId) {
         query = query.eq("category_id", categoryId);
+        countQuery = countQuery.eq("category_id", categoryId);
     }
 
-    const { data, error } = await query.range(from, to);
+    if (search) {
+        query = query.ilike("name", `%${search}%`);
+        countQuery = countQuery.ilike("name", `%${search}%`);
+    }
 
-if (error) {
-    return next(error);
-}
+    // Apply sorting
+    if (sort === "price-low") {
+        query = query.order("price", { ascending: true });
+    } else if (sort === "price-high") {
+        query = query.order("price", { ascending: false });
+    } else if (sort === "name-az") {
+        query = query.order("name", { ascending: true });
+    } else if (sort === "name-za") {
+        query = query.order("name", { ascending: false });
+    } else {
+        query = query.order("id");
+    }
 
+    const [{ data, error }, { count, error: countError }] = await Promise.all([
+        query.range(from, to),
+        countQuery
+    ]);
 
-await redis.setEx(cacheKey, 60, JSON.stringify(data));
-await redis.sAdd("product_cache_keys", cacheKey);
+    if (error) {
+        console.error("Supabase query error:", JSON.stringify(error));
+        return next(error);
+    }
 
-res.json(data);
+    const total = count ?? 0;
+    const totalPages = Math.ceil(total / limit);
+
+    const responseData = {
+        products: data,
+        page,
+        limit,
+        total,
+        totalPages
+    };
+
+    if (redis && redis.isOpen) {
+        try {
+            await redis.setEx(cacheKey, 60, JSON.stringify(responseData));
+            await redis.sAdd("product_cache_keys", cacheKey);
+        } catch (err) {
+            console.error("Redis cache set error:", err.message);
+        }
+    }
+
+    res.json(responseData);
 };
 const getProductById = async (req, res,next) => {
     const id = Number(req.params.id);
 
     const { data, error } = await supabase
         .from("products")
-        .select("*")
+        .select("*, inventory(quantity)")
         .eq("id", id)
         .single();
 

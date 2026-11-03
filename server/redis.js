@@ -1,7 +1,8 @@
 const { createClient } = require("redis");
 
 const redis = createClient({
-    url: "redis://localhost:6379"
+    url: "redis://127.0.0.1:6379",
+    disableOfflineQueue: true
 });
 
 redis.on("error", (err) => {

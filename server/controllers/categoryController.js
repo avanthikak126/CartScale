@@ -113,10 +113,42 @@ const deleteCategory = async (req, res, next) => {
     });
 };
 
+const getCategoryProductsByName = async (req, res, next) => {
+    try {
+        const rawName = (req.params.name || "").replace(/-/g, " ").trim();
+        const { data: category, error: catError } = await supabase
+            .from("categories")
+            .select("*")
+            .ilike("name", rawName)
+            .single();
+
+        if (catError || !category) {
+            return res.status(404).json({
+                error: "Category not found"
+            });
+        }
+
+        const { data: products, error: prodError } = await supabase
+            .from("products")
+            .select("id, name, price, category_id")
+            .eq("category_id", category.id)
+            .order("id");
+
+        if (prodError) {
+            return next(prodError);
+        }
+
+        res.json(products);
+    } catch (err) {
+        next(err);
+    }
+};
+
 module.exports = {
     getCategories,
     getCategoryById,
     createCategory,
     updateCategory,
-    deleteCategory
+    deleteCategory,
+    getCategoryProductsByName
 };

@@ -7,8 +7,15 @@ const createOrder = async (req, res, next) => {
     if (address_id) rpcParams.p_address_id = address_id;
     if (payment_method) rpcParams.p_payment_method = payment_method;
 
-    const { data, error } = await req.supabase
+    let { data, error } = await req.supabase
         .rpc("create_order", rpcParams);
+
+    // Fall back to no-arg create_order if database has not applied migration 002
+    if (error && Object.keys(rpcParams).length > 0 && error.code === "PGRST202") {
+        const fallback = await req.supabase.rpc("create_order");
+        data = fallback.data;
+        error = fallback.error;
+    }
 
     if (error) {
         return next(error);
@@ -18,7 +25,7 @@ const createOrder = async (req, res, next) => {
 };
 
 const getOrders = async (req, res, next) => {
-    const { data, error } = await req.supabase
+    let { data, error } = await req.supabase
         .from("orders")
         .select(`
             id,
@@ -46,6 +53,28 @@ const getOrders = async (req, res, next) => {
         .eq("user_id", req.user.id)
         .order("created_at", { ascending: false });
 
+    if (error && (error.code === "PGRST200" || error.code === "PGRST205" || error.code === "42703")) {
+        const fallback = await req.supabase
+            .from("orders")
+            .select(`
+                id,
+                status,
+                total_amount,
+                created_at,
+                order_items (
+                    id,
+                    product_id,
+                    quantity,
+                    price
+                )
+            `)
+            .eq("user_id", req.user.id)
+            .order("created_at", { ascending: false });
+
+        data = fallback.data;
+        error = fallback.error;
+    }
+
     if (error) {
         return next(error);
     }
@@ -56,7 +85,7 @@ const getOrders = async (req, res, next) => {
 const getOrderById = async (req, res, next) => {
     const id = Number(req.params.id);
 
-    const { data, error } = await req.supabase
+    let { data, error } = await req.supabase
         .from("orders")
         .select(`
             id,
@@ -84,6 +113,29 @@ const getOrderById = async (req, res, next) => {
         .eq("id", id)
         .eq("user_id", req.user.id)
         .single();
+
+    if (error && (error.code === "PGRST200" || error.code === "PGRST205" || error.code === "42703")) {
+        const fallback = await req.supabase
+            .from("orders")
+            .select(`
+                id,
+                status,
+                total_amount,
+                created_at,
+                order_items (
+                    id,
+                    product_id,
+                    quantity,
+                    price
+                )
+            `)
+            .eq("id", id)
+            .eq("user_id", req.user.id)
+            .single();
+
+        data = fallback.data;
+        error = fallback.error;
+    }
 
     if (error) {
         if (error.code === "PGRST116") {

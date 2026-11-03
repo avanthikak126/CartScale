@@ -5,7 +5,8 @@ const {
     getCategoryById,
     createCategory,
     updateCategory,
-    deleteCategory
+    deleteCategory,
+    getCategoryProductsByName
 } = require("../controllers/categoryController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -15,6 +16,7 @@ const router = express.Router();
 
 router.get("/categories", getCategories);
 router.get("/categories/:id", getCategoryById);
+router.get("/category/:name", getCategoryProductsByName);
 
 router.post(
     "/categories",

@@ -1,0 +1,129 @@
+.address-card {
+  background: var(--cs-white);
+  border: 2px solid var(--cs-gray-100);
+  border-radius: var(--cs-radius-lg);
+  overflow: hidden;
+  transition: var(--cs-transition);
+}
+
+.address-card:hover {
+  border-color: var(--cs-gray-200);
+}
+
+.address-card.selected {
+  border-color: var(--cs-accent);
+  background: var(--cs-accent-light);
+}
+
+.address-card-body {
+  display: flex;
+  gap: 14px;
+  padding: 18px 20px;
+  cursor: pointer;
+}
+
+.address-card-check {
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.address-radio {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--cs-radius-full);
+  border: 2px solid var(--cs-gray-300);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--cs-transition-fast);
+}
+
+.address-radio.checked {
+  border-color: var(--cs-accent);
+  background: var(--cs-accent);
+  color: var(--cs-white);
+}
+
+.address-card-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.address-card-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--cs-gray-800);
+  margin-bottom: 6px;
+}
+
+.address-card-line {
+  font-size: 14px;
+  color: var(--cs-gray-600);
+  margin-bottom: 4px;
+}
+
+.address-card-city {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--cs-gray-500);
+  margin-bottom: 4px;
+}
+
+.address-card-phone {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--cs-gray-500);
+}
+
+.address-card-actions {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--cs-gray-100);
+}
+
+.address-action-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--cs-gray-500);
+  transition: var(--cs-transition-fast);
+}
+
+.address-action-btn:not(:last-child) {
+  border-right: 1px solid var(--cs-gray-100);
+}
+
+.address-action-btn.edit:hover {
+  color: var(--cs-primary-light);
+  background: var(--cs-primary-50);
+}
+
+.address-action-btn.delete:hover {
+  color: var(--cs-error);
+  background: var(--cs-error-light);
+}
+
+.address-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.address-card.selected .address-card-actions {
+  border-top-color: rgba(249, 115, 22, 0.15);
+}
+
+@media (max-width: 480px) {
+  .address-card-body { padding: 14px 16px; }
+}

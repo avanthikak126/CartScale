@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
 const express = require("express");
 const cors = require("cors");
@@ -12,6 +12,8 @@ const addressRoutes = require("./routes/addressRoutes");
 const { connectRedis, redis } = require("./redis");
 const rateLimit = require("express-rate-limit");
 const paymentRoutes = require("./routes/paymentRoutes");
+const wishlistRoutes = require("./routes/wishlistRoutes");
+const smartBuyRoutes = require("./routes/smartBuyRoutes");
 
 const app = express();
 app.use(cors({
@@ -36,6 +38,8 @@ app.use(cartRoutes);
 app.use(orderRoutes);
 app.use(addressRoutes);
 app.use(paymentRoutes);
+app.use(wishlistRoutes);
+app.use(smartBuyRoutes);
 app.get("/health", async (req, res) => {
     try {
         await redis.ping();

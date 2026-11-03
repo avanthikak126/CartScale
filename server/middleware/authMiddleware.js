@@ -16,7 +16,7 @@ const authMiddleware = async (req, res, next) => {
 
     const userClient = createClient(
         process.env.SUPABASE_URL,
-        process.env.SUPABASE_KEY,
+        process.env.SUPABASE_PUBLISHABLE_KEY,
         {
             global: {
                 headers: {

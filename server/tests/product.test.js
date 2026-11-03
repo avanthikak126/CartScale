@@ -7,7 +7,8 @@ describe("GET /products", () => {
             .get("/products");
 
         expect(response.statusCode).toBe(200);
-        expect(Array.isArray(response.body)).toBe(true);
+        const list = response.body.products || response.body;
+        expect(Array.isArray(list)).toBe(true);
     });
 
     test("should reject invalid pagination", async () => {
@@ -22,7 +23,8 @@ describe("GET /products", () => {
             .get("/products?page=1&limit=10");
 
         expect(response.statusCode).toBe(200);
-        expect(response.body.length).toBeLessThanOrEqual(10);
+        const list = response.body.products || response.body;
+        expect(list.length).toBeLessThanOrEqual(10);
     });
 
     test("should reject limit greater than 50", async () => {
