@@ -1,6 +1,6 @@
 /**
- * SmartBuy Recommendation & Bundle Optimization Service
- * Deterministic, explainable scoring and budget optimization algorithms.
+ * SmartBuy Recommendation & Search Optimizer Service
+ * Deterministic, explainable scoring and product search algorithms.
  */
 
 // Known keywords to category mapping (matching CartScale's 6 DB categories)
@@ -20,7 +20,7 @@ const CATEGORY_KEYWORDS = {
     keywords: [
       'shirt', 'shirts', 't-shirt', 't-shirts', 'tshirt', 'tshirts', 'jeans', 'clothing', 'clothes',
       'apparel', 'dress', 'dresses', 'fashion', 'shoes', 'sneakers', 'jacket', 'jackets', 'cotton',
-      'wear', 'pants', 'trousers', 'hoodie', 'top', 'outfit', 'kurti', 'saree', 'footwear', 'sandal'
+      'wear', 'pants', 'trousers', 'hoodie', 'top', 'outfit', 'kurti', 'saree', 'footwear', 'sandal', 'heels'
     ]
   },
   3: { // Books
@@ -57,220 +57,257 @@ const CATEGORY_KEYWORDS = {
   }
 };
 
+// Words that indicate an accessory or complementary attachment rather than a primary product
+const ACCESSORY_KEYWORDS = [
+  'charger', 'cable', 'adapter', 'case', 'cover', 'strap',
+  'stand', 'mount', 'holder', 'pouch', 'sleeve', 'protector'
+];
+
+// Product type equivalence & synonym groupings
+const PRODUCT_TYPE_SYNONYMS = {
+  phone: ['phone', 'phones', 'smartphone', 'smartphones', 'mobile', 'mobiles', 'iphone', 'iphones', 'galaxy', 'cellphone'],
+  headphone: ['headphone', 'headphones', 'earphone', 'earphones', 'earbuds', 'airpods', 'headset', 'audio'],
+  laptop: ['laptop', 'laptops', 'notebook', 'notebooks', 'macbook', 'zenbook', 'chromebook', 'ultrabook'],
+  shirt: ['shirt', 'shirts', 'tshirt', 't-shirt', 'tshirts', 't-shirts', 'tee', 'top', 'apparel'],
+  shoes: ['shoe', 'shoes', 'footwear', 'sneaker', 'sneakers', 'heel', 'heels', 'boots', 'sandals', 'sandal'],
+  chair: ['chair', 'chairs', 'seating', 'armchair', 'seat'],
+  mouse: ['mouse', 'mice'],
+  keyboard: ['keyboard', 'keyboards'],
+  tablet: ['tablet', 'tablets', 'ipad'],
+  watch: ['watch', 'watches', 'smartwatch', 'smartwatches'],
+  speaker: ['speaker', 'speakers'],
+  camera: ['camera', 'cameras'],
+  dress: ['dress', 'dresses', 'gown'],
+  jacket: ['jacket', 'jackets', 'coat', 'hoodie'],
+  jeans: ['jeans', 'pants', 'trousers', 'denim'],
+  book: ['book', 'books', 'novel', 'novels', 'textbook'],
+  perfume: ['perfume', 'fragrance', 'cologne', 'eau de'],
+  lipstick: ['lipstick', 'lip', 'makeup'],
+  bed: ['bed', 'sofa', 'couch'],
+  table: ['table', 'desk']
+};
+
+const KNOWN_BRANDS = [
+  'samsung', 'apple', 'sony', 'asus', 'dell', 'beats', 'calvin klein',
+  'puma', 'nike', 'adidas', 'chanel', 'dior', 'gucci', 'gigabyte',
+  'knoll', 'annibale colombo', 'huawei', 'panasonic', 'lenovo', 'hp'
+];
+
 /**
- * Deterministically parse natural language shopping queries
- * @param {string} text - User's natural language input
- * @returns {object} Parsed structure with mode, budget, category, keywords, brand, etc.
+ * Parse and clean user search query, extracting potential budget phrases, brand intents,
+ * target product nouns, and accessory checks.
  */
-function parseNaturalLanguageQuery(text) {
-  if (!text || typeof text !== 'string') {
+function parseQuery(rawQuery) {
+  if (!rawQuery || typeof rawQuery !== 'string') {
     return {
-      budget: null,
-      mode: 'single',
-      categories: [],
-      features: [],
-      brand: null,
-      raw: '',
-      confidence: 'low',
-      clarifications: ['Please provide a shopping request or budget (e.g. "Headphones under ₹3,000")']
+      cleanedQuery: '',
+      queryBudget: null,
+      tokens: [],
+      requestedBrand: null,
+      requestedNouns: [],
+      isAccessoryQuery: false
     };
   }
 
-  const raw = text.trim();
-  let lower = raw.toLowerCase()
-    .replace(/\bthingsd\b/g, 'things')
-    .replace(/\biteams\b/g, 'items')
-    .replace(/\bstufs?\b/g, 'stuff')
-    .replace(/\bphon\b/g, 'phone')
-    .replace(/\bheadfones?\b/g, 'headphones')
-    .replace(/\bbookes?\b/g, 'books')
-    .replace(/\bstudyd?\b/g, 'study');
+  let str = rawQuery.trim();
+  let queryBudget = null;
 
-  // 1. Extract Budget
-  let budget = null;
-  // Patterns like: under 3000, under ₹3,000, within 4k, budget of 15000, < 25000, up to rs 5000
-  const budgetRegexes = [
-    /(?:under|below|within|budget(?:\s*of)?|max|up\s*to|less\s*than|at\s*most|\<=?)\s*(?:₹|rs\.?|inr)?\s*([0-9]+(?:,[0-9]+)*(?:\.[0-9]+)?)\s*(k|lakh|lakhs)?\b/i,
-    /(?:₹|rs\.?|inr)\s*([0-9]+(?:,[0-9]+)*(?:\.[0-9]+)?)\s*(k|lakh|lakhs)?\b/i,
-    /\b([0-9]+(?:,[0-9]+)*)\s*(k)\b/i,
-    /\b([0-9]+(?:,[0-9]+)*)\s*(lakh|lakhs)\b/i
-  ];
-
-  for (const regex of budgetRegexes) {
-    const match = lower.match(regex);
-    if (match) {
-      let numStr = match[1].replace(/,/g, '');
-      let val = parseFloat(numStr);
-      const unit = (match[2] || '').toLowerCase();
-      if (unit === 'k') val *= 1000;
-      else if (unit.startsWith('lakh')) val *= 100000;
-
-      if (!isNaN(val) && val > 0) {
-        budget = Math.round(val);
-        break;
-      }
-    }
+  // Extract expressions like "under ₹50,000", "below 25000", "less than 1000"
+  const budgetMatch = str.match(/(?:under|below|less\s+than)\s*(?:₹|rs\.?|inr)?\s*([\d,]+)/i);
+  if (budgetMatch) {
+    queryBudget = parseInt(budgetMatch[1].replace(/,/g, ''), 10);
+    str = str.replace(budgetMatch[0], '').trim();
   }
 
-  // 2. Detect Mode (single product vs bundle)
-  const bundleWords = ['bundle', 'setup', 'combo', 'pack', 'kit', 'and', 'with a', '+'];
-  const hasBundleWord = bundleWords.some(w => lower.includes(w));
+  const lower = str.toLowerCase();
+  const isAccessoryQuery = ACCESSORY_KEYWORDS.some(k => new RegExp('\\b' + k + '\\b', 'i').test(lower));
 
-  // 3. Match Categories from Keywords
-  const matchedCategoryIds = new Set();
-  const matchedKeywords = [];
-
-  for (const [catId, meta] of Object.entries(CATEGORY_KEYWORDS)) {
-    for (const kw of meta.keywords) {
-      const kwRegex = new RegExp(`\\b${kw}\\b`, 'i');
-      if (kwRegex.test(lower)) {
-        matchedCategoryIds.add(Number(catId));
-        matchedKeywords.push(kw);
-      }
-    }
-  }
-
-  // Extract custom subject keywords from query (excluding common stop words)
-  const stopWords = new Set([
-    'under', 'below', 'within', 'budget', 'of', 'max', 'up', 'to', 'less', 'than', 'at', 'most',
-    'rs', 'inr', 'for', 'with', 'a', 'an', 'the', 'and', 'or', 'in', 'need', 'find', 'build',
-    'buy', 'get', 'give', 'me', 'i', 'things', 'stuff', 'items', 'products', 'good', 'best',
-    'k', 'lakh', 'lakhs'
-  ]);
-  const words = lower.split(/[^a-zA-Z0-9]+/).filter(w => w.length > 2 && !stopWords.has(w) && !/^\d+$/.test(w));
-  for (const word of words) {
-    if (!matchedKeywords.includes(word)) {
-      matchedKeywords.push(word);
-    }
-  }
-
-  // If multiple distinct categories found or explicit bundle keyword used with 2+ keywords
-  const isBundle = hasBundleWord && (matchedCategoryIds.size >= 2 || /bundle|setup|combo|kit/i.test(lower));
-  const mode = isBundle ? 'bundle' : 'single';
-
-  // 4. Feature / Attribute Extraction (e.g. camera, noise canceling, wireless, battery)
-  const knownFeatures = [
-    'camera', 'noise canceling', 'noise cancelling', 'anc', 'wireless', 'bluetooth',
-    'cotton', 'gaming', 'fast charging', 'battery', 'bass', 'waterproof', 'leather',
-    'compact', 'lightweight', 'mechanical', 'rgb', '4k', 'oled'
-  ];
-  const detectedFeatures = knownFeatures.filter(f => lower.includes(f));
-
-  // 5. Brand Extraction (common catalogue brands)
-  const commonBrands = ['apple', 'sony', 'samsung', 'nike', 'puma', 'glamour beauty', 'logitech', 'boat', 'dell', 'hp'];
-  let detectedBrand = null;
-  for (const b of commonBrands) {
-    if (new RegExp(`\\b${b}\\b`, 'i').test(lower)) {
-      detectedBrand = b;
+  // Detect brand in query
+  let requestedBrand = null;
+  for (const b of KNOWN_BRANDS) {
+    if (new RegExp('\\b' + b + '\\b', 'i').test(lower)) {
+      requestedBrand = b;
       break;
     }
   }
 
-  const clarifications = [];
-  if (!budget) {
-    clarifications.push('No budget was detected. Please specify your spending limit in rupees.');
-  }
-  if (matchedCategoryIds.size === 0) {
-    clarifications.push('No specific category was recognized. Showing best overall options across all categories.');
+  // Tokenize query words
+  const tokens = lower.split(/[\s,]+/).filter(Boolean);
+
+  // Identify core target nouns
+  const requestedNouns = [];
+  for (const [nounKey, syns] of Object.entries(PRODUCT_TYPE_SYNONYMS)) {
+    if (tokens.some(t => syns.includes(t))) {
+      requestedNouns.push(nounKey);
+    }
   }
 
   return {
-    raw,
-    budget,
-    mode,
-    categoryIds: Array.from(matchedCategoryIds),
-    keywords: matchedKeywords,
-    features: detectedFeatures,
-    brand: detectedBrand,
-    confidence: budget && matchedCategoryIds.size > 0 ? 'high' : budget ? 'medium' : 'low',
-    clarifications
+    cleanedQuery: str,
+    queryBudget,
+    tokens,
+    requestedBrand,
+    requestedNouns,
+    isAccessoryQuery
   };
 }
 
 /**
- * Score a single product deterministically against budget and preferences (0 - 100)
- *
- * Scoring breakdown (weights sum to 1.0):
- * - Category / Target Match: 35%
- * - Value / Budget Efficiency: 30%
- * - Quality / Verified Rating: 25%
- * - Brand / Attribute Match: 10%
- *
- * Missing fields are handled safely without artificial inflation.
+ * Score a single product deterministically against query, budget, and optional preferences (0 - 100)
  */
-function scoreProduct(product, { budget, categoryId, targetKeywords = [], preferredBrand = null, sortBy = 'smart' } = {}) {
+function scoreProduct(product, {
+  budget = null,
+  categoryId = null,
+  preferredBrand = null,
+  query = null,
+  parsedQuery = null,
+  sortBy = 'smart'
+} = {}) {
   const price = Number(product.price);
-  if (isNaN(price) || price <= 0 || (budget && price > budget)) {
+  if (isNaN(price) || price <= 0) {
+    return { eligible: false, score: 0, reasons: ['Invalid product price recorded.'] };
+  }
+
+  // 1. Budget Constraint
+  const effectiveBudget = budget !== null && budget !== undefined ? Number(budget) : (parsedQuery?.queryBudget || null);
+  if (effectiveBudget && price > effectiveBudget) {
     return {
       eligible: false,
       score: 0,
-      reasons: ['Product price exceeds the specified budget.']
+      reasons: [`Exceeds budget limit of ₹${effectiveBudget.toLocaleString('en-IN')}`]
     };
   }
 
-  const reasons = [];
+  // 2. Category Filter Constraint
+  if (categoryId && Number(product.category_id) !== Number(categoryId)) {
+    return {
+      eligible: false,
+      score: 0,
+      reasons: ['Product does not belong to selected category.']
+    };
+  }
 
-  // --- 1. Category / Keyword Match (0 - 100) ---
-  let categoryScore = 70; // baseline if no specific category requested
-  if (categoryId) {
-    if (Number(product.category_id) === Number(categoryId)) {
-      categoryScore = 100;
-      reasons.push('Matches requested category');
-    } else {
+  // 3. Preferred Brand Filter Constraint
+  if (preferredBrand) {
+    const pBrand = (product.brand || '').toLowerCase();
+    if (!pBrand.includes(preferredBrand.toLowerCase())) {
       return {
         eligible: false,
         score: 0,
-        reasons: ['Product does not belong to requested category.']
+        reasons: [`Product is not from preferred brand "${preferredBrand}".`]
       };
     }
   }
 
-  // Bonus for matching specific keywords in name/description/category
-  let featureScore = 70;
-  if (targetKeywords && targetKeywords.length > 0) {
-    const textBlob = `${product.name || ''} ${product.description || ''} ${product.categories?.name || ''}`.toLowerCase();
-    let matches = 0;
-    const matchedNames = [];
-    for (const kw of targetKeywords) {
-      if (textBlob.includes(kw.toLowerCase())) {
-        matches++;
-        matchedNames.push(kw);
+  const pName = (product.name || '').toLowerCase();
+  const pBrand = (product.brand || '').toLowerCase();
+  const pDesc = (product.description || '').toLowerCase();
+  const pCatName = (product.categories?.name || '').toLowerCase();
+  const textBlob = `${pName} ${pBrand} ${pDesc} ${pCatName}`.toLowerCase();
+
+  const reasons = [];
+  const parsed = parsedQuery || parseQuery(query);
+
+  // 4. Query Matching & Intent Guardrails
+  let queryRelevanceScore = 75; // Baseline when browsing without specific query
+
+  if (parsed.cleanedQuery) {
+    // A. Accessory Guardrail: If product is an accessory but user didn't ask for accessories, exclude it
+    // (e.g. searching "phone" or "wireless mouse" should never return an "iPhone charger" or "wireless charger")
+    const isProductAccessory = ACCESSORY_KEYWORDS.some(k => new RegExp('\\b' + k + '\\b', 'i').test(pName));
+    if (isProductAccessory && !parsed.isAccessoryQuery) {
+      return {
+        eligible: false,
+        score: 0,
+        reasons: ['Product is an accessory and does not match the requested item.']
+      };
+    }
+
+    // B. Requested Brand in Query
+    if (parsed.requestedBrand) {
+      const brandMatches = pBrand.includes(parsed.requestedBrand) || pName.includes(parsed.requestedBrand);
+      if (!brandMatches) {
+        return {
+          eligible: false,
+          score: 0,
+          reasons: [`Does not match requested brand "${parsed.requestedBrand}".`]
+        };
+      }
+      reasons.push(`Brand match: ${product.brand || parsed.requestedBrand}`);
+    }
+
+    // C. Target Product Noun Matching
+    // If user specified a distinct target product type (e.g. "phone", "shirt", "shoes", "laptop", "mouse", "chair"):
+    // Product MUST match the requested noun or its synonyms.
+    if (parsed.requestedNouns.length > 0) {
+      let matchedNoun = null;
+      for (const noun of parsed.requestedNouns) {
+        const syns = PRODUCT_TYPE_SYNONYMS[noun] || [noun];
+        if (syns.some(s => new RegExp('\\b' + s + '\\b', 'i').test(textBlob))) {
+          matchedNoun = noun;
+          break;
+        }
+      }
+
+      if (!matchedNoun) {
+        return {
+          eligible: false,
+          score: 0,
+          reasons: ['Does not match the requested product type.']
+        };
+      }
+      reasons.push(`Matches requested product type: ${matchedNoun}`);
+    } else {
+      // General keyword matching for non-specific nouns
+      let matchedTermsCount = 0;
+      for (const term of parsed.tokens) {
+        if (textBlob.includes(term)) {
+          matchedTermsCount++;
+        }
+      }
+
+      if (matchedTermsCount === 0) {
+        return {
+          eligible: false,
+          score: 0,
+          reasons: ['Does not match search terms.']
+        };
       }
     }
-    if (matches > 0) {
-      featureScore = Math.min(100, 70 + (matches / targetKeywords.length) * 30);
-      reasons.push(`Matches keywords: "${matchedNames.join(', ')}"`);
-    } else if (!categoryId) {
-      // User searched for specific search terms, product has zero match: exclude it
-      return {
-        eligible: false,
-        score: 0,
-        reasons: ['Does not match requested search terms.']
-      };
+
+    // Calculate fine-grained relevance score (0 - 100)
+    let relevance = 60;
+    const lowerCleaned = parsed.cleanedQuery.toLowerCase();
+
+    // Exact phrase in name
+    if (pName.includes(lowerCleaned)) {
+      relevance = 100;
+      reasons.unshift(`Direct title match for "${parsed.cleanedQuery}"`);
     } else {
-      featureScore = 30;
+      // Word coverage
+      const nameMatches = parsed.tokens.filter(t => pName.includes(t)).length;
+      const coverage = parsed.tokens.length > 0 ? nameMatches / parsed.tokens.length : 0;
+      relevance = Math.min(95, 65 + Math.round(coverage * 30));
+      if (coverage > 0.5) {
+        reasons.unshift(`Strong title match for "${parsed.cleanedQuery}"`);
+      }
     }
+
+    queryRelevanceScore = relevance;
   }
 
-  // Combined thematic score
-  const thematicScore = (categoryScore * 0.6) + (featureScore * 0.4);
-
-  // --- 2. Value / Budget Efficiency (0 - 100) ---
-  // Lower priced items shouldn't be penalized if they are quality, but an item
-  // that costs ₹100 on a ₹50,000 budget is usually not the primary item sought.
-  // We award high efficiency when price uses 30%-90% of budget, while preserving
-  // genuine savings.
+  // 5. Value / Budget Efficiency (0 - 100)
   let valueScore = 75;
-  if (budget && budget > 0) {
-    const priceRatio = price / budget;
-    const savings = budget - price;
-    const savingsPercent = Math.round((savings / budget) * 100);
+  if (effectiveBudget && effectiveBudget > 0) {
+    const priceRatio = price / effectiveBudget;
+    const savings = effectiveBudget - price;
+    const savingsPercent = Math.round((savings / effectiveBudget) * 100);
 
     // Quadratic efficiency curve around 0.65 of budget
     const deviation = Math.abs(0.65 - priceRatio);
     valueScore = Math.max(30, Math.min(100, Math.round(95 - (deviation * 70))));
 
-    // Discount percentage reward if present
+    // Discount percentage reward
     const discount = Number(product.discount_percentage) || 0;
     if (discount > 0) {
       valueScore = Math.min(100, valueScore + Math.min(15, discount * 0.3));
@@ -282,11 +319,17 @@ function scoreProduct(product, { budget, categoryId, targetKeywords = [], prefer
     } else {
       reasons.push(`Fully utilizes budget at ₹${price.toLocaleString('en-IN')}`);
     }
+  } else {
+    // If no budget limit was set, reward discounts and great pricing
+    const discount = Number(product.discount_percentage) || 0;
+    if (discount > 0) {
+      valueScore = Math.min(100, 75 + Math.min(25, discount * 0.5));
+      reasons.push(`${discount}% discount off catalogue price`);
+    }
   }
 
-  // --- 3. Rating & Quality (0 - 100) ---
-  // Missing rating: neutral 50 score (never 0, but never beating a 4.5+ item)
-  let qualityScore = 50;
+  // 6. Rating & Quality (0 - 100)
+  let qualityScore = 50; // Neutral baseline for unrated
   const rating = Number(product.rating);
   if (!isNaN(rating) && rating > 0) {
     qualityScore = Math.min(100, Math.round((rating / 5) * 100));
@@ -295,36 +338,32 @@ function scoreProduct(product, { budget, categoryId, targetKeywords = [], prefer
     reasons.push('Standard catalogue listing (no customer rating recorded)');
   }
 
-  // --- 4. Brand Match (0 - 100) ---
+  // 7. Brand Score (0 - 100)
   let brandScore = 60;
   if (preferredBrand) {
-    const prodBrand = (product.brand || '').toLowerCase();
-    if (prodBrand && prodBrand.includes(preferredBrand.toLowerCase())) {
-      brandScore = 100;
-      reasons.push(`Matches preferred brand "${product.brand}"`);
-    } else {
-      brandScore = 30;
-    }
+    brandScore = 100;
+    reasons.push(`Matches preferred brand "${product.brand}"`);
   } else if (product.brand) {
     brandScore = 80;
     reasons.push(`Branded item (${product.brand})`);
   }
 
-  // --- Final Weighted Score Calculation ---
+  // 8. Final Weighted Score Calculation
   let totalScore = Math.round(
-    (thematicScore * 0.35) +
-    (valueScore * 0.30) +
+    (queryRelevanceScore * 0.40) +
+    (valueScore * 0.25) +
     (qualityScore * 0.25) +
     (brandScore * 0.10)
   );
 
-  // Sorting overrides when user requests specific focus
+  // Sorting overrides when requested
   if (sortBy === 'rating') {
-    totalScore = Math.round((qualityScore * 0.6) + (thematicScore * 0.2) + (valueScore * 0.2));
+    totalScore = Math.round((qualityScore * 0.55) + (queryRelevanceScore * 0.30) + (valueScore * 0.15));
   } else if (sortBy === 'price_low') {
-    // Reward lower prices
-    const cheapBonus = budget ? Math.round(((budget - price) / budget) * 40) : 0;
-    totalScore = Math.min(100, Math.round((thematicScore * 0.4) + cheapBonus + (qualityScore * 0.2)));
+    const cheapBonus = effectiveBudget ? Math.round(((effectiveBudget - price) / effectiveBudget) * 40) : Math.max(0, 100 - Math.round(price / 100));
+    totalScore = Math.min(100, Math.round((queryRelevanceScore * 0.35) + (cheapBonus * 0.45) + (qualityScore * 0.20)));
+  } else if (sortBy === 'price_high') {
+    totalScore = Math.min(100, Math.round((queryRelevanceScore * 0.35) + (qualityScore * 0.25) + Math.min(40, Math.round(price / 1000))));
   }
 
   totalScore = Math.max(0, Math.min(100, totalScore));
@@ -333,7 +372,7 @@ function scoreProduct(product, { budget, categoryId, targetKeywords = [], prefer
     eligible: true,
     score: totalScore,
     breakdown: {
-      thematic: Math.round(thematicScore),
+      thematic: Math.round(queryRelevanceScore),
       value: Math.round(valueScore),
       quality: Math.round(qualityScore),
       brand: Math.round(brandScore)
@@ -343,32 +382,45 @@ function scoreProduct(product, { budget, categoryId, targetKeywords = [], prefer
 }
 
 /**
- * Rank eligible products within budget
+ * Rank eligible products deterministically
  */
 function rankProducts(products, options = {}) {
-  const { budget, limit = 12 } = options;
+  const { limit = 20, sortBy = 'smart' } = options;
+  const parsedQuery = parseQuery(options.query);
+  const optionsWithParsed = { ...options, parsedQuery };
 
   const eligibleScored = [];
 
   for (const product of products) {
-    const price = Number(product.price);
-    if (isNaN(price) || price <= 0) continue;
-    if (budget && price > budget) continue;
-
-    const evalResult = scoreProduct(product, options);
+    const evalResult = scoreProduct(product, optionsWithParsed);
     if (evalResult.eligible) {
       eligibleScored.push({
         ...product,
         smartScore: evalResult.score,
         scoreBreakdown: evalResult.breakdown,
-        explanation: evalResult.reasons.join(' • '),
+        explanation: evalResult.reasons.slice(0, 3).join(' • '),
         reasons: evalResult.reasons
       });
     }
   }
 
-  // Deterministic sort: smartScore DESC, price ASC (tie breaker), id ASC (consistent ordering)
+  // Sorting:
   eligibleScored.sort((a, b) => {
+    if (sortBy === 'price_low') {
+      if (a.price !== b.price) return a.price - b.price;
+      return b.smartScore - a.smartScore;
+    }
+    if (sortBy === 'price_high') {
+      if (b.price !== a.price) return b.price - a.price;
+      return b.smartScore - a.smartScore;
+    }
+    if (sortBy === 'rating') {
+      const rA = Number(a.rating) || 0;
+      const rB = Number(b.rating) || 0;
+      if (rB !== rA) return rB - rA;
+      return b.smartScore - a.smartScore;
+    }
+    // Default: 'smart'
     if (b.smartScore !== a.smartScore) return b.smartScore - a.smartScore;
     if (a.price !== b.price) return a.price - b.price;
     return a.id - b.id;
@@ -378,236 +430,40 @@ function rankProducts(products, options = {}) {
 }
 
 /**
- * Genuine Budget-Constrained Bundle Optimizer
- *
- * Given a total budget and required categories/item counts:
- * Finds a combination of distinct items respecting:
- * 1. sum(price) <= budget
- * 2. Every requested category is satisfied
- * 3. No duplicate product IDs
- * 4. Maximizes combined value/utility score
- *
- * If no combination is feasible, reports minimum required budget and explanation.
+ * Find the lowest priced product matching query/category constraints ignoring budget,
+ * to provide intelligent guidance when budget is exceeded.
  */
-function optimizeBundle({ products, budget, requirements, strategy = 'best_value' }) {
-  if (!budget || budget <= 0) {
-    return {
-      success: false,
-      reason: 'invalid_budget',
-      message: 'A valid positive budget is required to build a bundle.'
-    };
-  }
+function findLowestPriceMatch(products, options = {}) {
+  const optionsWithoutBudget = { ...options, budget: null };
+  const parsed = parseQuery(options.query);
+  optionsWithoutBudget.parsedQuery = { ...parsed, queryBudget: null };
 
-  if (!requirements || !Array.isArray(requirements) || requirements.length === 0) {
-    return {
-      success: false,
-      reason: 'no_requirements',
-      message: 'Please select at least one category to include in the bundle.'
-    };
-  }
-
-  // 1. Initial Feasibility Check: Find minimum possible bundle price across the entire catalogue
-  let minPossiblePrice = 0;
-  for (const req of requirements) {
-    const catId = Number(req.category_id || req.id);
-    const catName = req.name || (CATEGORY_KEYWORDS[catId] ? CATEGORY_KEYWORDS[catId].name : `Category ${catId}`);
-    const count = Math.max(1, Number(req.count) || 1);
-
-    const allInCat = products
-      .filter(p => Number(p.category_id) === catId && Number(p.price) > 0)
-      .sort((a, b) => Number(a.price) - Number(b.price));
-
-    if (allInCat.length < count) {
-      return {
-        success: false,
-        reason: 'insufficient_stock',
-        categoryName: catName,
-        message: `Not enough distinct items in "${catName}" to fulfill required count of ${count}.`
-      };
-    }
-
-    for (let i = 0; i < count; i++) {
-      minPossiblePrice += Number(allInCat[i].price);
+  const matches = [];
+  for (const product of products) {
+    const evalResult = scoreProduct(product, optionsWithoutBudget);
+    if (evalResult.eligible) {
+      matches.push(product);
     }
   }
 
-  if (minPossiblePrice > budget) {
-    const deficit = minPossiblePrice - budget;
-    return {
-      success: false,
-      reason: 'insufficient_budget',
-      minRequiredBudget: minPossiblePrice,
-      deficit,
-      message: `The minimum possible cost to build this bundle is ₹${minPossiblePrice.toLocaleString('en-IN')}, which exceeds your budget of ₹${budget.toLocaleString('en-IN')} by ₹${deficit.toLocaleString('en-IN')}. Try increasing your budget or choosing different categories.`
-    };
-  }
+  if (matches.length === 0) return null;
 
-  // 2. Group candidate products by required category within budget
-  const categoryPools = [];
-  const requiredCategoriesSummary = [];
-
-  for (const req of requirements) {
-    const catId = Number(req.category_id || req.id);
-    const catName = req.name || (CATEGORY_KEYWORDS[catId] ? CATEGORY_KEYWORDS[catId].name : `Category ${catId}`);
-    const count = Math.max(1, Number(req.count) || 1);
-
-    const candidates = products
-      .filter(p => Number(p.category_id) === catId && Number(p.price) > 0 && Number(p.price) <= budget)
-      .map(p => {
-        const evalResult = scoreProduct(p, { budget, categoryId: catId });
-        return {
-          ...p,
-          smartScore: evalResult.score,
-          reasons: evalResult.reasons
-        };
-      })
-      .sort((a, b) => b.smartScore - a.smartScore || a.price - b.price);
-
-    if (candidates.length === 0) {
-      return {
-        success: false,
-        reason: 'no_products_in_category',
-        categoryName: catName,
-        message: `No available products in "${catName}" are priced under the total budget of ₹${budget.toLocaleString('en-IN')}.`
-      };
-    }
-
-    categoryPools.push({
-      categoryId: catId,
-      categoryName: catName,
-      count,
-      candidates
-    });
-
-    requiredCategoriesSummary.push({ id: catId, name: catName, count });
-  }
-
-  // 3. Branch-and-Bound Combinatorial Optimization
-  // Flatten requirements into slot positions
-  const slots = [];
-  for (const pool of categoryPools) {
-    for (let c = 0; c < pool.count; c++) {
-      slots.push({
-        categoryId: pool.categoryId,
-        categoryName: pool.categoryName,
-        candidates: pool.candidates
-      });
-    }
-  }
-
-  let bestBundle = null;
-  let bestScore = -1;
-
-  function search(slotIdx, currentSelection, currentCost, usedIds) {
-    if (slotIdx === slots.length) {
-      // Calculate overall bundle score
-      const totalScore = currentSelection.reduce((acc, item) => acc + item.smartScore, 0);
-      const savingsBonus = ((budget - currentCost) / budget) * 15; // Modest bonus for staying efficiently under budget
-      const objective = strategy === 'budget_saver'
-        ? (budget - currentCost) + (totalScore * 5)
-        : totalScore + savingsBonus;
-
-      if (objective > bestScore) {
-        bestScore = objective;
-        bestBundle = [...currentSelection];
-      }
-      return;
-    }
-
-    const slot = slots[slotIdx];
-    // Inspect top candidate items for this slot (up to top 8 candidates to keep execution instant)
-    const topCandidates = slot.candidates.slice(0, 8);
-
-    for (const candidate of topCandidates) {
-      if (usedIds.has(candidate.id)) continue;
-      if (currentCost + Number(candidate.price) > budget) continue;
-
-      usedIds.add(candidate.id);
-      currentSelection.push(candidate);
-
-      search(slotIdx + 1, currentSelection, currentCost + Number(candidate.price), usedIds);
-
-      currentSelection.pop();
-      usedIds.delete(candidate.id);
-    }
-  }
-
-  search(0, [], 0, new Set());
-
-  // Fallback if top candidates were pruned too aggressively: greedy selection by lowest price
-  if (!bestBundle) {
-    const greedySelection = [];
-    let greedyCost = 0;
-    const greedyIds = new Set();
-
-    for (const slot of slots) {
-      const cheapest = slot.candidates.find(c => !greedyIds.has(c.id) && greedyCost + Number(c.price) <= budget);
-      if (cheapest) {
-        greedySelection.push(cheapest);
-        greedyCost += Number(cheapest.price);
-        greedyIds.add(cheapest.id);
-      }
-    }
-
-    if (greedySelection.length === slots.length) {
-      bestBundle = greedySelection;
-    }
-  }
-
-  if (!bestBundle || bestBundle.length < slots.length) {
-    return {
-      success: false,
-      reason: 'no_combination_found',
-      minRequiredBudget: minPossiblePrice,
-      message: `Could not find a combination of distinct items within ₹${budget.toLocaleString('en-IN')}. Minimum possible cost is ₹${minPossiblePrice.toLocaleString('en-IN')}.`
-    };
-  }
-
-  // Calculate bundle summary
-  const totalPrice = bestBundle.reduce((sum, item) => sum + Number(item.price), 0);
-  const remainingBudget = budget - totalPrice;
-  const averageScore = Math.round(bestBundle.reduce((sum, item) => sum + item.smartScore, 0) / bestBundle.length);
-
-  // Provide alternative replacement candidates for each item in the bundle
-  const itemsWithAlternatives = bestBundle.map(selectedItem => {
-    const pool = categoryPools.find(p => p.categoryId === Number(selectedItem.category_id));
-    const maxAffordablePrice = Number(selectedItem.price) + remainingBudget;
-
-    const alternatives = pool ? pool.candidates
-      .filter(c => c.id !== selectedItem.id && Number(c.price) <= maxAffordablePrice && !bestBundle.some(b => b.id === c.id))
-      .slice(0, 4)
-      .map(alt => ({
-        id: alt.id,
-        name: alt.name,
-        price: Number(alt.price),
-        rating: Number(alt.rating) || 0,
-        smartScore: alt.smartScore,
-        priceDelta: Number(alt.price) - Number(selectedItem.price)
-      })) : [];
-
-    return {
-      ...selectedItem,
-      alternatives
-    };
-  });
-
+  matches.sort((a, b) => Number(a.price) - Number(b.price));
+  const cheapest = matches[0];
   return {
-    success: true,
-    budget,
-    totalPrice,
-    remainingBudget,
-    bundleScore: averageScore,
-    itemsCount: bestBundle.length,
-    items: itemsWithAlternatives,
-    categoriesIncluded: requiredCategoriesSummary,
-    explanation: `Optimized bundle of ${bestBundle.length} items totaling ₹${totalPrice.toLocaleString('en-IN')} with ₹${remainingBudget.toLocaleString('en-IN')} savings remaining.`
+    id: cheapest.id,
+    name: cheapest.name,
+    price: Number(cheapest.price),
+    categoryName: cheapest.categories?.name || null
   };
 }
 
 module.exports = {
   CATEGORY_KEYWORDS,
-  parseNaturalLanguageQuery,
+  ACCESSORY_KEYWORDS,
+  PRODUCT_TYPE_SYNONYMS,
+  parseQuery,
   scoreProduct,
   rankProducts,
-  optimizeBundle
+  findLowestPriceMatch
 };

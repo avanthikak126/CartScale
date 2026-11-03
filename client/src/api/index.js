@@ -122,13 +122,8 @@ export const removeFromWishlist = (productId) =>
 export const checkWishlistItem = (productId) =>
   request(`/wishlist/check/${productId}`, { auth: true });
 
-// SmartBuy Budget Assistant
+// SmartBuy Product Search & Recommendation Optimizer
 export const getSmartBuyRecommendations = (params) =>
   request('/smartbuy/recommend', { method: 'POST', body: params });
 
-export const getSmartBuyBundle = (params) =>
-  request('/smartbuy/bundle', { method: 'POST', body: params });
-
-export const parseSmartBuyQuery = (query) =>
-  request('/smartbuy/parse', { method: 'POST', body: { query } });
 

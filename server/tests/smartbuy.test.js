@@ -3,11 +3,10 @@ const app = require("../server");
 const {
   scoreProduct,
   rankProducts,
-  optimizeBundle,
-  parseNaturalLanguageQuery
+  parseQuery
 } = require("../services/smartBuyService");
 
-describe("SmartBuy Scoring & Ranking Engine (Unit Tests)", () => {
+describe("SmartBuy Search & Scoring Engine (Unit Tests)", () => {
   const sampleProducts = [
     {
       id: 1,
@@ -59,10 +58,19 @@ describe("SmartBuy Scoring & Ranking Engine (Unit Tests)", () => {
       discount_percentage: 20,
       brand: "Puma",
       inventory: { quantity: 10 }
+    },
+    {
+      id: 6,
+      name: "Headphone Replacement Cable",
+      description: "3.5mm audio aux cable adapter",
+      price: 299,
+      category_id: 1,
+      rating: 4.0,
+      inventory: { quantity: 50 }
     }
   ];
 
-  test("Products exceeding the budget are strictly excluded", () => {
+  test("Products exceeding the budget are strictly excluded when budget is set", () => {
     const budget = 3000;
     const ranked = rankProducts(sampleProducts, { budget });
 
@@ -71,14 +79,21 @@ describe("SmartBuy Scoring & Ranking Engine (Unit Tests)", () => {
     expect(ranked.every(p => p.price <= budget)).toBe(true);
   });
 
-  test("Hard category constraints are respected", () => {
+  test("Works without budget or category filter when searching by query", () => {
+    const ranked = rankProducts(sampleProducts, { query: "shirt" });
+
+    expect(ranked.length).toBeGreaterThan(0);
+    // Should match both t-shirt and cotton shirt
+    expect(ranked.every(p => p.category_id === 2)).toBe(true);
+  });
+
+  test("Hard category constraints are respected when provided", () => {
     const ranked = rankProducts(sampleProducts, { budget: 5000, categoryId: 2 });
-    // All returned products should belong to category 2
     expect(ranked.every(p => p.category_id === 2)).toBe(true);
     expect(ranked.some(p => p.category_id === 1)).toBe(false);
   });
 
-  test("Missing ratings or specifications are handled safely without crashing or artificial boost", () => {
+  test("Missing ratings are handled safely without crashing or artificial boost", () => {
     const unrated = sampleProducts.find(p => p.id === 4);
     const rated = sampleProducts.find(p => p.id === 5);
 
@@ -89,7 +104,7 @@ describe("SmartBuy Scoring & Ranking Engine (Unit Tests)", () => {
     expect(scoreUnrated.score).toBeGreaterThan(0);
     expect(scoreUnrated.breakdown.quality).toBe(50); // neutral baseline
 
-    // Rated 4.5 product must have higher quality score than unrated (50 vs 90)
+    // Rated 4.5 product must have higher quality score than unrated
     expect(scoreRated.breakdown.quality).toBeGreaterThan(scoreUnrated.breakdown.quality);
   });
 
@@ -101,138 +116,26 @@ describe("SmartBuy Scoring & Ranking Engine (Unit Tests)", () => {
     expect(run1.map(p => p.smartScore)).toEqual(run2.map(p => p.smartScore));
   });
 
-  test("Suitable lower-priced products with great value can outrank more expensive products", () => {
-    // When searching for wireless noise canceling headphones within 5000 budget:
-    // Product 2 (2999, rating 4.8, feature match) vs hypothetical high-priced mediocre product
-    const overpricedMediocre = {
-      id: 99,
-      name: "Generic Headphones",
-      description: "Standard headphones",
-      price: 4900, // consumes almost all budget
-      category_id: 1,
-      rating: 2.5,
-      inventory: { quantity: 10 }
-    };
+  test("Accessories are not included when searching for primary products", () => {
+    // When searching for "headphones", "Headphone Replacement Cable" (accessory) should be excluded
+    const ranked = rankProducts(sampleProducts, { query: "headphones" });
 
-    const candidates = [sampleProducts[1], overpricedMediocre];
-    const ranked = rankProducts(candidates, {
-      budget: 5000,
-      targetKeywords: ["noise canceling", "wireless"]
-    });
-
-    // Product 2 (₹2999, 4.8★, ANC) must outrank product 99 (₹4900, 2.5★)
-    expect(ranked[0].id).toBe(2);
-    expect(ranked[0].smartScore).toBeGreaterThan(ranked[1].smartScore);
-  });
-});
-
-describe("SmartBuy Bundle Optimizer (Unit Tests)", () => {
-  const catalogue = [
-    // Category 1: Electronics
-    { id: 101, name: "Smart Phone A", price: 12000, category_id: 1, rating: 4.3 },
-    { id: 102, name: "Smart Phone B", price: 18000, category_id: 1, rating: 4.7 },
-    { id: 103, name: "Budget Phone C", price: 8000, category_id: 1, rating: 3.9 },
-
-    // Category 2: Fashion
-    { id: 201, name: "Cotton Jacket", price: 2500, category_id: 2, rating: 4.2 },
-    { id: 202, name: "Denim Jeans", price: 1500, category_id: 2, rating: 4.4 },
-    { id: 203, name: "Casual T-Shirt", price: 500, category_id: 2, rating: 4.0 },
-
-    // Category 6: Sports
-    { id: 601, name: "Fitness Tracker", price: 2000, category_id: 6, rating: 4.5 },
-    { id: 602, name: "Gym Bag", price: 1200, category_id: 6, rating: 4.1 },
-    { id: 603, name: "Yoga Mat", price: 800, category_id: 6, rating: 4.6 }
-  ];
-
-  test("Bundles never exceed the budget", () => {
-    const budget = 15000;
-    const requirements = [
-      { category_id: 1, name: "Electronics", count: 1 },
-      { category_id: 2, name: "Fashion", count: 1 }
-    ];
-
-    const result = optimizeBundle({ products: catalogue, budget, requirements });
-
-    expect(result.success).toBe(true);
-    expect(result.totalPrice).toBeLessThanOrEqual(budget);
-    expect(result.remainingBudget).toBeGreaterThanOrEqual(0);
-    expect(result.totalPrice + result.remainingBudget).toBe(budget);
+    expect(ranked.some(p => p.id === 6)).toBe(false);
+    expect(ranked.some(p => p.id === 2)).toBe(true);
   });
 
-  test("Required categories are satisfied when a feasible bundle exists", () => {
-    const budget = 25000;
-    const requirements = [
-      { category_id: 1, name: "Electronics", count: 1 },
-      { category_id: 2, name: "Fashion", count: 1 },
-      { category_id: 6, name: "Sports", count: 1 }
-    ];
-
-    const result = optimizeBundle({ products: catalogue, budget, requirements });
-
-    expect(result.success).toBe(true);
-    expect(result.items.length).toBe(3);
-
-    const categoriesInResult = result.items.map(i => Number(i.category_id));
-    expect(categoriesInResult).toContain(1);
-    expect(categoriesInResult).toContain(2);
-    expect(categoriesInResult).toContain(6);
+  test("parseQuery extracts budget phrases like 'laptop under ₹50,000'", () => {
+    const parsed = parseQuery("laptop under ₹50,000");
+    expect(parsed.queryBudget).toBe(50000);
+    expect(parsed.cleanedQuery).toBe("laptop");
+    expect(parsed.requestedNouns).toContain("laptop");
   });
 
-  test("Impossible bundles return a useful explanation with minimum required budget", () => {
-    // Cheapest Phone is 8000, cheapest Fashion is 500 -> total min = 8500
-    // If budget is 5000, bundle is strictly impossible
-    const budget = 5000;
-    const requirements = [
-      { category_id: 1, name: "Electronics", count: 1 },
-      { category_id: 2, name: "Fashion", count: 1 }
-    ];
-
-    const result = optimizeBundle({ products: catalogue, budget, requirements });
-
-    expect(result.success).toBe(false);
-    expect(result.reason).toBe("insufficient_budget");
-    expect(result.minRequiredBudget).toBe(8500);
-    expect(result.deficit).toBe(3500);
-    expect(result.message).toContain("minimum possible cost");
-  });
-
-  test("Duplicate items are prevented within the bundle", () => {
-    const budget = 20000;
-    // Request 2 items from Electronics
-    const requirements = [
-      { category_id: 1, name: "Electronics", count: 2 }
-    ];
-
-    const result = optimizeBundle({ products: catalogue, budget, requirements });
-
-    expect(result.success).toBe(true);
-    expect(result.items.length).toBe(2);
-    // Must be two distinct items
-    expect(result.items[0].id).not.toBe(result.items[1].id);
-  });
-});
-
-describe("Natural Language Query Parser (Unit Tests)", () => {
-  test("Extracts budget and categories from natural queries", () => {
-    const q1 = parseNaturalLanguageQuery("I need headphones under ₹3,000");
-    expect(q1.budget).toBe(3000);
-    expect(q1.mode).toBe("single");
-    expect(q1.categoryIds).toContain(1); // Electronics
-
-    const q2 = parseNaturalLanguageQuery("Find a phone under 25k with a good camera");
-    expect(q2.budget).toBe(25000);
-    expect(q2.features).toContain("camera");
-    expect(q2.categoryIds).toContain(1);
-
-    const q3 = parseNaturalLanguageQuery("Build a sports bundle within ₹4,000");
-    expect(q3.budget).toBe(4000);
-    expect(q3.mode).toBe("bundle");
-    expect(q3.categoryIds).toContain(6); // Sports
-
-    const q4 = parseNaturalLanguageQuery("study thingsd under 2000");
-    expect(q4.budget).toBe(2000);
-    expect(q4.categoryIds).toContain(3); // Books
-    expect(q4.confidence).toBe("high");
+  test("Unrelated products are not returned merely because they share a generic keyword", () => {
+    // Searching for "wireless mouse" when no mouse exists should return 0 products,
+    // and not match "Wireless ANC Headphones" just because it has "wireless"
+    const ranked = rankProducts(sampleProducts, { query: "wireless mouse" });
+    expect(ranked.length).toBe(0);
   });
 });
 
@@ -255,6 +158,60 @@ describe("SmartBuy API Endpoints (Integration Tests)", () => {
     }
   });
 
+  test("POST /smartbuy/recommend works with text query without category or budget", async () => {
+    const res = await request(app)
+      .post("/smartbuy/recommend")
+      .send({
+        query: "shirt"
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toHaveProperty("products");
+    expect(Array.isArray(res.body.products)).toBe(true);
+    expect(res.body.products.length).toBeGreaterThan(0);
+    expect(res.body.products.some(p => p.name.toLowerCase().includes("shirt"))).toBe(true);
+  });
+
+  test("POST /smartbuy/recommend matches brand queries like Samsung phone", async () => {
+    const res = await request(app)
+      .post("/smartbuy/recommend")
+      .send({
+        query: "Samsung phone"
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toHaveProperty("products");
+    expect(Array.isArray(res.body.products)).toBe(true);
+    expect(res.body.products.length).toBeGreaterThan(0);
+    // All results must be Samsung and not accessories
+    expect(res.body.products.every(p => (p.brand || '').toLowerCase().includes("samsung") || p.name.toLowerCase().includes("samsung"))).toBe(true);
+  });
+
+  test("POST /smartbuy/recommend returns 0 results for wireless mouse with helpful info", async () => {
+    const res = await request(app)
+      .post("/smartbuy/recommend")
+      .send({
+        query: "wireless mouse"
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.products.length).toBe(0);
+  });
+
+  test("POST /smartbuy/recommend handles laptop under ₹50,000 with minMatchingProduct guidance", async () => {
+    const res = await request(app)
+      .post("/smartbuy/recommend")
+      .send({
+        query: "laptop under ₹50,000"
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.products.length).toBe(0);
+    expect(res.body.minMatchingProduct).not.toBeNull();
+    expect(res.body.minMatchingProduct.price).toBeGreaterThan(50000);
+    expect(typeof res.body.minMatchingProduct.name).toBe("string");
+  });
+
   test("POST /smartbuy/recommend rejects invalid input (negative budget)", async () => {
     const res = await request(app)
       .post("/smartbuy/recommend")
@@ -264,38 +221,5 @@ describe("SmartBuy API Endpoints (Integration Tests)", () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.body).toHaveProperty("error");
-  });
-
-  test("POST /smartbuy/bundle returns optimized bundle or helpful feasibility response", async () => {
-    const res = await request(app)
-      .post("/smartbuy/bundle")
-      .send({
-        budget: 10000,
-        categories: [
-          { category_id: 2, count: 1 },
-          { category_id: 3, count: 1 }
-        ]
-      });
-
-    expect(res.statusCode).toBe(200);
-    if (res.body.success) {
-      expect(res.body.totalPrice).toBeLessThanOrEqual(10000);
-      expect(res.body.items.length).toBe(2);
-      expect(res.body).toHaveProperty("remainingBudget");
-    } else {
-      expect(res.body).toHaveProperty("message");
-    }
-  });
-
-  test("POST /smartbuy/parse returns structured interpretations", async () => {
-    const res = await request(app)
-      .post("/smartbuy/parse")
-      .send({
-        query: "Headphones under ₹2,500"
-      });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body.parsed).toHaveProperty("budget", 2500);
-    expect(res.body.parsed.categoryIds).toContain(1);
   });
 });

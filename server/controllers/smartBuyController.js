@@ -1,13 +1,13 @@
 const supabase = require("../supabase");
-const { recommendSchema, bundleSchema, parseSchema } = require("../validators/smartBuyValidator");
+const { recommendSchema } = require("../validators/smartBuyValidator");
 const {
-  parseNaturalLanguageQuery,
   rankProducts,
-  optimizeBundle
+  parseQuery,
+  findLowestPriceMatch
 } = require("../services/smartBuyService");
 
 /**
- * Handle Single Product Budget Recommendation
+ * Handle Single Product / Smart Search Recommendation
  * Public endpoint - works for both guests and authenticated users.
  */
 const getRecommendations = async (req, res, next) => {
@@ -18,33 +18,24 @@ const getRecommendations = async (req, res, next) => {
     });
   }
 
-  const { budget, category_id, query, preferred_brand, sort_by, limit } = result.data;
+  const { query, budget, category_id, preferred_brand, sort_by, limit } = result.data;
 
   try {
-    // If a natural language query was passed, extract keywords
-    let extractedKeywords = [];
-    let detectedBrand = preferred_brand;
-    let resolvedCategoryId = category_id;
+    const parsed = parseQuery(query);
+    // Effective budget: explicit budget filter takes precedence, otherwise extracted budget from query
+    const effectiveBudget = (budget !== null && budget !== undefined) ? Number(budget) : (parsed.queryBudget || null);
 
-    if (query) {
-      const parsed = parseNaturalLanguageQuery(query);
-      extractedKeywords = [...parsed.keywords, ...parsed.features];
-      if (!detectedBrand && parsed.brand) {
-        detectedBrand = parsed.brand;
-      }
-      if (!resolvedCategoryId && parsed.categoryIds.length === 1) {
-        resolvedCategoryId = parsed.categoryIds[0];
-      }
-    }
-
-    // Query real products from Supabase within budget
+    // Query products from Supabase
     let dbQuery = supabase
       .from("products")
-      .select("*, categories(name), inventory(quantity)")
-      .lte("price", budget);
+      .select("*, categories(name), inventory(quantity)");
 
-    if (resolvedCategoryId) {
-      dbQuery = dbQuery.eq("category_id", resolvedCategoryId);
+    if (category_id) {
+      dbQuery = dbQuery.eq("category_id", category_id);
+    }
+
+    if (effectiveBudget) {
+      dbQuery = dbQuery.lte("price", effectiveBudget);
     }
 
     const { data: products, error } = await dbQuery;
@@ -62,131 +53,65 @@ const getRecommendations = async (req, res, next) => {
       return true;
     });
 
-    // Rank products deterministically
+    // Rank products deterministically using semantic intent & scoring
     const ranked = rankProducts(availableProducts, {
-      budget,
-      categoryId: resolvedCategoryId,
-      targetKeywords: extractedKeywords,
-      preferredBrand: detectedBrand,
+      budget: effectiveBudget,
+      categoryId: category_id,
+      preferredBrand: preferred_brand,
+      query,
+      parsedQuery: parsed,
       sortBy: sort_by,
       limit
     });
 
-    // If 0 items found in a specific category, find lowest priced product in that category for guidance
-    let minCategoryProduct = null;
-    if (resolvedCategoryId && ranked.length === 0) {
-      const { data: cheapest } = await supabase
+    // If 0 items found within the budget, check if matching items exist above budget for helpful guidance
+    let minMatchingProduct = null;
+    if (effectiveBudget && ranked.length === 0) {
+      // Query candidate items without budget limit to find lowest priced match
+      let unconstrainedQuery = supabase
         .from("products")
-        .select("name, price, categories(name)")
-        .eq("category_id", resolvedCategoryId)
-        .order("price", { ascending: true })
-        .limit(1)
-        .maybeSingle();
+        .select("*, categories(name), inventory(quantity)");
 
-      if (cheapest) {
-        minCategoryProduct = {
-          name: cheapest.name,
-          price: Number(cheapest.price),
-          categoryName: cheapest.categories?.name
-        };
+      if (category_id) {
+        unconstrainedQuery = unconstrainedQuery.eq("category_id", category_id);
+      }
+
+      const { data: allCandidates } = await unconstrainedQuery;
+      if (allCandidates && allCandidates.length > 0) {
+        const availableAll = allCandidates.filter(p => {
+          if (p.inventory && typeof p.inventory.quantity === 'number') {
+            return p.inventory.quantity > 0;
+          }
+          return true;
+        });
+
+        minMatchingProduct = findLowestPriceMatch(availableAll, {
+          categoryId: category_id,
+          preferredBrand: preferred_brand,
+          query
+        });
       }
     }
 
     res.json({
-      budget,
+      query: query || null,
+      budget: effectiveBudget || null,
       count: ranked.length,
       products: ranked,
-      minCategoryProduct,
+      minMatchingProduct,
       appliedFilters: {
-        budget,
-        category_id: resolvedCategoryId,
         query: query || null,
-        preferred_brand: detectedBrand || null,
-        sort_by,
-        extractedKeywords
+        budget: effectiveBudget || null,
+        category_id: category_id || null,
+        preferred_brand: preferred_brand || null,
+        sort_by
       }
     });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * Handle Budget-Constrained Bundle Optimization
- * Public endpoint - authoritative calculations done server-side.
- */
-const getBundle = async (req, res, next) => {
-  const result = bundleSchema.safeParse(req.body);
-  if (!result.success) {
-    return res.status(400).json({
-      error: result.error.issues[0]?.message || "Invalid bundle parameters"
-    });
-  }
-
-  const { budget, categories, strategy } = result.data;
-
-  try {
-    const categoryIds = categories.map(c => c.category_id);
-
-    // Fetch candidate products from Supabase
-    const { data: products, error } = await supabase
-      .from("products")
-      .select("*, categories(name), inventory(quantity)")
-      .in("category_id", categoryIds)
-      .lte("price", budget);
-
-    if (error) {
-      console.error("Supabase error in SmartBuy bundle:", error);
-      return next(error);
-    }
-
-    // Filter out confirmed out-of-stock items
-    const availableProducts = (products || []).filter(p => {
-      if (p.inventory && typeof p.inventory.quantity === 'number') {
-        return p.inventory.quantity > 0;
-      }
-      return true;
-    });
-
-    // Authoritative bundle optimization
-    const bundleResult = optimizeBundle({
-      products: availableProducts,
-      budget,
-      requirements: categories,
-      strategy
-    });
-
-    if (!bundleResult.success) {
-      return res.status(200).json(bundleResult);
-    }
-
-    res.json(bundleResult);
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * Natural Language Query Parser Endpoint
- */
-const parseQuery = async (req, res, next) => {
-  const result = parseSchema.safeParse(req.body);
-  if (!result.success) {
-    return res.status(400).json({
-      error: result.error.issues[0]?.message || "Query is required"
-    });
-  }
-
-  try {
-    const parsed = parseNaturalLanguageQuery(result.data.query);
-    res.json({ parsed });
   } catch (err) {
     next(err);
   }
 };
 
 module.exports = {
-  getRecommendations,
-  getBundle,
-  parseQuery
+  getRecommendations
 };
