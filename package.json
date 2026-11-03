@@ -1,0 +1,14 @@
+{
+  "name": "cartscale",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CartScale full-stack e-commerce application",
+  "scripts": {
+    "install:client": "npm --prefix client ci",
+    "install:server": "npm --prefix server ci",
+    "build:client": "npm --prefix client run build",
+    "build": "npm --prefix client ci && npm --prefix client run build && npm --prefix server ci",
+    "start": "npm --prefix server start",
+    "test": "npm --prefix server test"
+  }
+}

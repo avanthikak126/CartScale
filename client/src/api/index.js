@@ -1,4 +1,9 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000';
+// In development, default to http://127.0.0.1:3000. In production, use relative URLs so requests go to the same Railway domain.
+const API_URL = import.meta.env.DEV
+  ? (import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000')
+  : (import.meta.env.VITE_API_URL && !import.meta.env.VITE_API_URL.includes('127.0.0.1') && !import.meta.env.VITE_API_URL.includes('localhost')
+      ? import.meta.env.VITE_API_URL
+      : '');
 
 function authHeaders() {
   const token = localStorage.getItem('token');
